@@ -1,11 +1,14 @@
 import streamlit as st
 import os
+import sounddevice as sd
+import numpy as np
 import tempfile
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from google.genai import Client
 from google.genai.errors import ClientError
-import base64
+import time
+import wave
 
 # =============================
 # Page Configuration
@@ -20,6 +23,7 @@ st.set_page_config(
 # Load Environment Variables
 # =============================
 load_dotenv()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
@@ -55,19 +59,36 @@ def get_working_model():
 MODEL_NAME = get_working_model()
 
 # =============================
+# Record Audio from Mic
+# =============================
+def record_audio(duration=5, sample_rate=16000):
+    recording = sd.rec(
+        int(duration * sample_rate),
+        samplerate=sample_rate,
+        channels=1,
+        dtype="int16",
+    )
+    sd.wait()
+    
+    # Save as WAV using wave module instead of soundfile
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    with wave.open(temp_file.name, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(sample_rate)
+        wf.writeframes(recording.tobytes())
+    
+    return temp_file.name
+
+# =============================
 # Speech to Text with Multiple Language Attempts
 # =============================
-def speech_to_text_multilang(audio_bytes):
+def speech_to_text_multilang(audio_path):
     """
     Try transcribing with both Punjabi and Urdu to see which works better.
     Returns: (transcribed_text, detected_language_code)
     """
     results = []
-    
-    # Save audio bytes to temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-        temp_audio.write(audio_bytes)
-        audio_path = temp_audio.name
     
     # Try Urdu first
     try:
@@ -77,8 +98,8 @@ def speech_to_text_multilang(audio_bytes):
                 model_id="scribe_v1",
                 language_code="urd"  # Urdu
             )
-        if transcript_ur.text.strip():
-            results.append(("urd", transcript_ur.text.strip()))
+            if transcript_ur.text.strip():
+                results.append(("urd", transcript_ur.text.strip()))
     except Exception as e:
         pass
     
@@ -90,19 +111,15 @@ def speech_to_text_multilang(audio_bytes):
                 model_id="scribe_v1",
                 language_code="pan"  # Punjabi
             )
-        if transcript_pa.text.strip():
-            results.append(("pan", transcript_pa.text.strip()))
+            if transcript_pa.text.strip():
+                results.append(("pan", transcript_pa.text.strip()))
     except Exception as e:
         pass
     
-    # Clean up temp file
-    try:
-        os.remove(audio_path)
-    except:
-        pass
-    
-    # If we have results, return the first successful result
+    # If we have results, let user choose or use AI to detect
     if results:
+        # For now, return the first successful result
+        # You can enhance this by comparing which one makes more sense
         return results[0][1], results[0][0]
     
     return "", "pan"
@@ -118,7 +135,8 @@ def detect_language_with_ai(text):
     if not text.strip():
         return "pan"
     
-    detection_prompt = f"""You are a language detection expert. Analyze the following text and determine if it is:
+    detection_prompt = f"""You are a language detection expert. 
+Analyze the following text and determine if it is:
 1. Punjabi (ਪੰਜਾਬੀ) - can be written in Gurmukhi or Shahmukhi script
 2. Urdu (اردو) - written in Perso-Arabic script
 3. English
@@ -133,6 +151,7 @@ Do not provide any explanation, just the language name in lowercase."""
             model=MODEL_NAME,
             contents=detection_prompt,
         )
+        
         detected = response.text.strip().lower()
         
         if "urdu" in detected:
@@ -144,6 +163,7 @@ Do not provide any explanation, just the language name in lowercase."""
         else:
             # Fallback to script detection
             return fallback_script_detection(text)
+            
     except Exception as e:
         st.warning(f"AI detection failed: {e}")
         return fallback_script_detection(text)
@@ -163,6 +183,7 @@ def fallback_script_detection(text):
     
     # Urdu-specific characters
     urdu_specific = sum(1 for c in text if c in 'ںےۓہھ')
+    
     # Punjabi-specific (Shahmukhi)
     punjabi_specific = sum(1 for c in text if c in 'ੜ੍')
     
@@ -173,7 +194,7 @@ def fallback_script_detection(text):
     elif latin > perso_arabic and latin > gurmukhi:
         return "eng"
     else:
-        # When in doubt, default
+        # When in doubt, ask user or default
         return "urd" if perso_arabic > 0 else "pan"
 
 # =============================
@@ -188,13 +209,13 @@ def generate_response(prompt, detected_language):
     
     # Language-specific instructions
     language_instructions = {
-        "urd": """You are a helpful AI assistant. The user is speaking in Urdu (اردو).
+        "urd": """You are a helpful AI assistant. The user is speaking in Urdu (اردو). 
 You MUST respond ONLY in Urdu using Perso-Arabic/Nastaliq script.
 Important: This is URDU, not Punjabi. Use proper Urdu vocabulary and grammar.
 Keep your responses natural, conversational, and friendly in Urdu.
 Do not mix languages. Use only Urdu (اردو).""",
         
-        "pan": """You are a helpful AI assistant. The user is speaking in Punjabi (ਪੰਜਾਬੀ).
+        "pan": """You are a helpful AI assistant. The user is speaking in Punjabi (ਪੰਜਾਬੀ). 
 You MUST respond ONLY in Punjabi.
 Important: This is PUNJABI, not Urdu. Use proper Punjabi vocabulary and grammar.
 You can use either Gurmukhi (ਪੰਜਾਬੀ) or Shahmukhi (پنجابی) script.
@@ -206,6 +227,7 @@ Respond in English with natural and conversational language."""
     }
     
     system_instruction = language_instructions.get(detected_language, language_instructions["pan"])
+    
     full_prompt = f"{system_instruction}\n\nUser: {prompt}\n\nAssistant:"
     
     response_text = ""
@@ -226,9 +248,8 @@ Respond in English with natural and conversational language."""
 # Text to Speech
 # =============================
 def speak_text(text):
-    """Generate and return audio file for browser playback"""
     if not text.strip():
-        return None
+        return
     
     try:
         audio_bytes = eleven_client.text_to_speech.convert(
@@ -237,15 +258,17 @@ def speak_text(text):
             text=text,
         )
         
-        # Collect all audio chunks
-        audio_data = b""
-        for chunk in audio_bytes:
-            audio_data += chunk
+        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        with open(temp_audio.name, "wb") as f:
+            for chunk in audio_bytes:
+                f.write(chunk)
         
-        return audio_data
+        # Use Streamlit's audio player instead of sounddevice for playback
+        st.audio(temp_audio.name)
+        
+        os.remove(temp_audio.name)
     except Exception as e:
         st.error(f"❌ TTS Error: {e}")
-        return None
 
 # =============================
 # Get Language Display Name
@@ -274,7 +297,6 @@ if 'conversation_history' not in st.session_state:
 # Language selection override (optional manual selection)
 st.sidebar.header("⚙️ Settings")
 manual_override = st.sidebar.checkbox("🔧 Manual Language Override", value=False)
-
 if manual_override:
     selected_lang = st.sidebar.selectbox(
         "Select Language",
@@ -294,69 +316,65 @@ if st.session_state.conversation_history:
             
             st.markdown(f"**🧑 You {user_flag} ({user_lang_name}):** {entry['user']}")
             st.markdown(f"**🤖 AI {ai_flag} ({ai_lang_name}):** {entry['ai']}")
-            
-            # Play audio if available
-            if 'audio' in entry and entry['audio']:
-                st.audio(entry['audio'], format="audio/mp3")
-            
             st.markdown("---")
 
-# Audio input widget (Streamlit native)
-st.subheader("🎙️ Record Your Voice")
-audio_bytes = st.audio_input("Press to record", key="audio_input")
+# Center the mic button
+col1, col2, col3 = st.columns([1, 2, 1])
 
-if audio_bytes:
-    with st.spinner("🔄 Transcribing with AI language detection..."):
-        # Convert speech to text
-        user_text, initial_lang = speech_to_text_multilang(audio_bytes.getvalue())
+with col2:
+    if st.button("🎤 Press to Speak", type="primary", use_container_width=True):
+        with st.spinner("🎙️ Recording... (5 seconds)"):
+            # Record audio
+            audio_path = record_audio(duration=5)
         
-        if not user_text:
-            st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
-        else:
-            # Use manual override if enabled, otherwise use AI detection
-            if manual_override:
-                detected_lang = selected_lang
-                st.info(f"🔧 Manual override: {get_language_display(detected_lang)[0]}")
+        with st.spinner("🔄 Transcribing with AI language detection..."):
+            # Convert speech to text
+            user_text, initial_lang = speech_to_text_multilang(audio_path)
+            
+            if not user_text:
+                st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
+                os.remove(audio_path)
             else:
-                with st.spinner("🤖 Detecting language with AI..."):
-                    detected_lang = detect_language_with_ai(user_text)
-            
-            lang_name, lang_flag = get_language_display(detected_lang)
-            st.success(f"**🧑 You {lang_flag}:** {user_text}")
-            st.info(f"✅ Detected Language: **{lang_name}**")
-            
-            with st.spinner(f"🤖 Generating response in {lang_name}..."):
-                # Generate AI response in the detected language
-                response = generate_response(user_text, detected_lang)
-                
-                if response:
-                    st.info(f"**🤖 AI {lang_flag}:** {response}")
-                    
-                    # Generate speech
-                    with st.spinner(f"🔊 Generating audio..."):
-                        audio_data = speak_text(response)
-                    
-                    # Add to conversation history
-                    st.session_state.conversation_history.append({
-                        'user': user_text,
-                        'ai': response,
-                        'user_language': detected_lang,
-                        'ai_language': detected_lang,
-                        'audio': audio_data
-                    })
-                    
-                    # Play the response
-                    if audio_data:
-                        st.audio(audio_data, format="audio/mp3")
-                    
-                    st.success("✅ Response completed!")
-                    st.rerun()
+                # Use manual override if enabled, otherwise use AI detection
+                if manual_override:
+                    detected_lang = selected_lang
+                    st.info(f"🔧 Manual override: {get_language_display(detected_lang)[0]}")
                 else:
-                    st.error("❌ Failed to generate response")
+                    with st.spinner("🤖 Detecting language with AI..."):
+                        detected_lang = detect_language_with_ai(user_text)
+                
+                lang_name, lang_flag = get_language_display(detected_lang)
+                
+                st.success(f"**🧑 You {lang_flag}:** {user_text}")
+                st.info(f"✅ Detected Language: **{lang_name}**")
+                
+                with st.spinner(f"🤖 Generating response in {lang_name}..."):
+                    # Generate AI response in the detected language
+                    response = generate_response(user_text, detected_lang)
+                    
+                    if response:
+                        st.info(f"**🤖 AI {lang_flag}:** {response}")
+                        
+                        # Add to conversation history
+                        st.session_state.conversation_history.append({
+                            'user': user_text,
+                            'ai': response,
+                            'user_language': detected_lang,
+                            'ai_language': detected_lang
+                        })
+                        
+                        with st.spinner(f"🔊 Speaking..."):
+                            speak_text(response)
+                        
+                        st.success("✅ Response completed!")
+                    else:
+                        st.error("❌ Failed to generate response")
+                
+                os.remove(audio_path)
 
 # Footer
 st.markdown("---")
-st.markdown("**ℹ️ Note:** Click the microphone icon above to record your voice.")
+st.markdown("**ℹ️ Note:** Each recording is 5 seconds long. Press the mic button to start.")
 st.markdown("**🤖 AI Model:** " + MODEL_NAME)
 st.markdown("**🔍 Detection:** AI-powered language detection")
 
