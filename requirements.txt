@@ -1,7 +1,6 @@
 streamlit
-sounddevice
-soundfile
 numpy
 python-dotenv
 elevenlabs
 google-genai
+streamlit-audiorecorder

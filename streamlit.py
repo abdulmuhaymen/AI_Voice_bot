@@ -8,14 +8,7 @@ from google.genai import Client
 from google.genai.errors import ClientError
 import time
 import wave
-
-# Try to import sounddevice, but make it optional for cloud deployment
-try:
-    import sounddevice as sd
-    AUDIO_RECORDING_AVAILABLE = True
-except Exception:
-    AUDIO_RECORDING_AVAILABLE = False
-    st.warning("⚠️ Audio recording not available on Streamlit Cloud. Use text input instead.")
+from audiorecorder import audiorecorder
 
 # =============================
 # Page Configuration
@@ -64,32 +57,6 @@ def get_working_model():
     return models[0].name.replace("models/", "")
 
 MODEL_NAME = get_working_model()
-
-# =============================
-# Record Audio from Mic (Local Only)
-# =============================
-def record_audio(duration=5, sample_rate=16000):
-    if not AUDIO_RECORDING_AVAILABLE:
-        st.error("Audio recording not available on cloud deployment")
-        return None
-        
-    recording = sd.rec(
-        int(duration * sample_rate),
-        samplerate=sample_rate,
-        channels=1,
-        dtype="int16",
-    )
-    sd.wait()
-    
-    # Save as WAV using wave module instead of soundfile
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    with wave.open(temp_file.name, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(recording.tobytes())
-    
-    return temp_file.name
 
 # =============================
 # Speech to Text with Multiple Language Attempts
@@ -371,10 +338,10 @@ if st.session_state.conversation_history:
             st.markdown("---")
 
 # Input method selection
-st.subheader("📝 Choose Input Method")
+st.subheader("💬 Send Message")
 
 # Text Input Tab
-with st.expander("✍️ Text Input (Works everywhere)", expanded=not AUDIO_RECORDING_AVAILABLE):
+with st.expander("✍️ Text Input", expanded=False):
     text_input = st.text_area(
         "Type your message in Punjabi, Urdu, or English:",
         height=100,
@@ -387,34 +354,29 @@ with st.expander("✍️ Text Input (Works everywhere)", expanded=not AUDIO_RECO
         else:
             st.warning("⚠️ Please enter some text")
 
-# Voice Input Tab (only if audio recording is available)
-if AUDIO_RECORDING_AVAILABLE:
-    with st.expander("🎤 Voice Input (Local only)", expanded=True):
-        col1, col2, col3 = st.columns([1, 2, 1])
+# Voice Input (works on cloud!)
+with st.expander("🎤 Voice Input", expanded=True):
+    st.markdown("**Click the mic button below, speak, then click stop:**")
+    
+    audio = audiorecorder("🎤 Start Recording", "⏹️ Stop Recording")
+    
+    if len(audio) > 0:
+        # Save the recorded audio to a temporary file
+        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        audio.export(temp_audio.name, format="wav")
         
-        with col2:
-            if st.button("🎤 Press to Speak", type="primary", use_container_width=True):
-                with st.spinner("🎙️ Recording... (5 seconds)"):
-                    # Record audio
-                    audio_path = record_audio(duration=5)
-                
-                if audio_path:
-                    with st.spinner("🔄 Transcribing with AI language detection..."):
-                        # Convert speech to text
-                        user_text, initial_lang = speech_to_text_multilang(audio_path)
-                        
-                        if not user_text:
-                            st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
-                        else:
-                            process_user_input(user_text, initial_lang)
-                        
-                        os.remove(audio_path)
-else:
-    st.info("💡 **Running on Streamlit Cloud?** Voice recording requires local deployment. Use text input above instead!")
-
+        with st.spinner("🔄 Transcribing your voice..."):
+            # Convert speech to text
+            user_text, initial_lang = speech_to_text_multilang(temp_audio.name)
+            
+            if not user_text:
+                st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
+            else:
+                process_user_input(user_text, initial_lang)
+            
+            os.remove(temp_audio.name)
 # Footer
 st.markdown("---")
-st.markdown("**ℹ️ Note:** Voice input works only when running locally. Use text input on Streamlit Cloud.")
 st.markdown("**🤖 AI Model:** " + MODEL_NAME)
 st.markdown("**🔍 Detection:** AI-powered language detection")
 
