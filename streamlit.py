@@ -7,8 +7,7 @@ from elevenlabs.client import ElevenLabs
 from google.genai import Client
 from google.genai.errors import ClientError
 import time
-import wave
-from audiorecorder import audiorecorder
+from st_audiorec import st_audiorec
 
 # =============================
 # Page Configuration
@@ -356,14 +355,15 @@ with st.expander("✍️ Text Input", expanded=False):
 
 # Voice Input (works on cloud!)
 with st.expander("🎤 Voice Input", expanded=True):
-    st.markdown("**Click the mic button below, speak, then click stop:**")
+    st.markdown("**Record your voice in Punjabi, Urdu, or English:**")
     
-    audio = audiorecorder("🎤 Start Recording", "⏹️ Stop Recording")
+    wav_audio_data = st_audiorec()
     
-    if len(audio) > 0:
+    if wav_audio_data is not None:
         # Save the recorded audio to a temporary file
         temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        audio.export(temp_audio.name, format="wav")
+        temp_audio.write(wav_audio_data)
+        temp_audio.close()
         
         with st.spinner("🔄 Transcribing your voice..."):
             # Convert speech to text
