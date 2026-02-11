@@ -7,7 +7,6 @@ from elevenlabs.client import ElevenLabs
 from google.genai import Client
 from google.genai.errors import ClientError
 import time
-from st_audiorec import st_audiorec
 
 # =============================
 # Page Configuration
@@ -355,26 +354,35 @@ with st.expander("✍️ Text Input", expanded=False):
 
 # Voice Input (works on cloud!)
 with st.expander("🎤 Voice Input", expanded=True):
-    st.markdown("**Record your voice in Punjabi, Urdu, or English:**")
+    st.markdown("**Upload your voice recording (WAV, MP3, M4A):**")
+    st.markdown("*Record on your phone/computer and upload here*")
     
-    wav_audio_data = st_audiorec()
+    uploaded_audio = st.file_uploader(
+        "Choose an audio file",
+        type=['wav', 'mp3', 'm4a', 'ogg', 'webm'],
+        key="audio_upload"
+    )
     
-    if wav_audio_data is not None:
-        # Save the recorded audio to a temporary file
-        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_audio.write(wav_audio_data)
+    if uploaded_audio is not None:
+        # Save uploaded file
+        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_audio.name.split('.')[-1]}")
+        temp_audio.write(uploaded_audio.read())
         temp_audio.close()
         
-        with st.spinner("🔄 Transcribing your voice..."):
-            # Convert speech to text
-            user_text, initial_lang = speech_to_text_multilang(temp_audio.name)
-            
-            if not user_text:
-                st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
-            else:
-                process_user_input(user_text, initial_lang)
-            
-            os.remove(temp_audio.name)
+        # Show audio player
+        st.audio(temp_audio.name)
+        
+        if st.button("🔄 Transcribe & Process", type="primary", use_container_width=True):
+            with st.spinner("🔄 Transcribing your voice..."):
+                # Convert speech to text
+                user_text, initial_lang = speech_to_text_multilang(temp_audio.name)
+                
+                if not user_text:
+                    st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
+                else:
+                    process_user_input(user_text, initial_lang)
+                
+                os.remove(temp_audio.name)
 # Footer
 st.markdown("---")
 st.markdown("**🤖 AI Model:** " + MODEL_NAME)
