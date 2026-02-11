@@ -3,4 +3,3 @@ numpy
 python-dotenv
 elevenlabs
 google-genai
-st-audiorec
