@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import sounddevice as sd
 import numpy as np
 import tempfile
 from dotenv import load_dotenv
@@ -9,6 +8,14 @@ from google.genai import Client
 from google.genai.errors import ClientError
 import time
 import wave
+
+# Try to import sounddevice, but make it optional for cloud deployment
+try:
+    import sounddevice as sd
+    AUDIO_RECORDING_AVAILABLE = True
+except Exception:
+    AUDIO_RECORDING_AVAILABLE = False
+    st.warning("⚠️ Audio recording not available on Streamlit Cloud. Use text input instead.")
 
 # =============================
 # Page Configuration
@@ -28,7 +35,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 if not GEMINI_API_KEY or not ELEVENLABS_API_KEY:
-    st.error("❌ Missing API keys in .env file")
+    st.error("❌ Missing API keys in .env file or Streamlit secrets")
     st.stop()
 
 # =============================
@@ -59,9 +66,13 @@ def get_working_model():
 MODEL_NAME = get_working_model()
 
 # =============================
-# Record Audio from Mic
+# Record Audio from Mic (Local Only)
 # =============================
 def record_audio(duration=5, sample_rate=16000):
+    if not AUDIO_RECORDING_AVAILABLE:
+        st.error("Audio recording not available on cloud deployment")
+        return None
+        
     recording = sd.rec(
         int(duration * sample_rate),
         samplerate=sample_rate,
@@ -283,6 +294,49 @@ def get_language_display(lang_code):
     return lang_map.get(lang_code, ("Unknown", "🌐"))
 
 # =============================
+# Process User Input (Text or Voice)
+# =============================
+def process_user_input(user_text, detected_lang=None):
+    """Common function to process both text and voice input"""
+    if not user_text.strip():
+        return
+    
+    # Use manual override if enabled, otherwise use AI detection
+    if st.session_state.get('manual_override', False):
+        detected_lang = st.session_state.get('selected_lang', 'pan')
+        st.info(f"🔧 Manual override: {get_language_display(detected_lang)[0]}")
+    elif detected_lang is None:
+        with st.spinner("🤖 Detecting language with AI..."):
+            detected_lang = detect_language_with_ai(user_text)
+    
+    lang_name, lang_flag = get_language_display(detected_lang)
+    
+    st.success(f"**🧑 You {lang_flag}:** {user_text}")
+    st.info(f"✅ Detected Language: **{lang_name}**")
+    
+    with st.spinner(f"🤖 Generating response in {lang_name}..."):
+        # Generate AI response in the detected language
+        response = generate_response(user_text, detected_lang)
+        
+        if response:
+            st.info(f"**🤖 AI {lang_flag}:** {response}")
+            
+            # Add to conversation history
+            st.session_state.conversation_history.append({
+                'user': user_text,
+                'ai': response,
+                'user_language': detected_lang,
+                'ai_language': detected_lang
+            })
+            
+            with st.spinner(f"🔊 Speaking..."):
+                speak_text(response)
+            
+            st.success("✅ Response completed!")
+        else:
+            st.error("❌ Failed to generate response")
+
+# =============================
 # Streamlit UI
 # =============================
 st.title("🎤 ਪੰਜਾਬੀ/اردو AI Voice Bot")
@@ -296,15 +350,13 @@ if 'conversation_history' not in st.session_state:
 
 # Language selection override (optional manual selection)
 st.sidebar.header("⚙️ Settings")
-manual_override = st.sidebar.checkbox("🔧 Manual Language Override", value=False)
-if manual_override:
-    selected_lang = st.sidebar.selectbox(
+st.session_state.manual_override = st.sidebar.checkbox("🔧 Manual Language Override", value=False)
+if st.session_state.manual_override:
+    st.session_state.selected_lang = st.sidebar.selectbox(
         "Select Language",
         options=["urd", "pan", "eng"],
         format_func=lambda x: get_language_display(x)[0]
     )
-else:
-    selected_lang = None
 
 # Display conversation history
 if st.session_state.conversation_history:
@@ -318,63 +370,51 @@ if st.session_state.conversation_history:
             st.markdown(f"**🤖 AI {ai_flag} ({ai_lang_name}):** {entry['ai']}")
             st.markdown("---")
 
-# Center the mic button
-col1, col2, col3 = st.columns([1, 2, 1])
+# Input method selection
+st.subheader("📝 Choose Input Method")
 
-with col2:
-    if st.button("🎤 Press to Speak", type="primary", use_container_width=True):
-        with st.spinner("🎙️ Recording... (5 seconds)"):
-            # Record audio
-            audio_path = record_audio(duration=5)
+# Text Input Tab
+with st.expander("✍️ Text Input (Works everywhere)", expanded=not AUDIO_RECORDING_AVAILABLE):
+    text_input = st.text_area(
+        "Type your message in Punjabi, Urdu, or English:",
+        height=100,
+        placeholder="ਪੰਜਾਬੀ / اردو / English"
+    )
+    
+    if st.button("📤 Send Text", type="primary", use_container_width=True):
+        if text_input.strip():
+            process_user_input(text_input)
+        else:
+            st.warning("⚠️ Please enter some text")
+
+# Voice Input Tab (only if audio recording is available)
+if AUDIO_RECORDING_AVAILABLE:
+    with st.expander("🎤 Voice Input (Local only)", expanded=True):
+        col1, col2, col3 = st.columns([1, 2, 1])
         
-        with st.spinner("🔄 Transcribing with AI language detection..."):
-            # Convert speech to text
-            user_text, initial_lang = speech_to_text_multilang(audio_path)
-            
-            if not user_text:
-                st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
-                os.remove(audio_path)
-            else:
-                # Use manual override if enabled, otherwise use AI detection
-                if manual_override:
-                    detected_lang = selected_lang
-                    st.info(f"🔧 Manual override: {get_language_display(detected_lang)[0]}")
-                else:
-                    with st.spinner("🤖 Detecting language with AI..."):
-                        detected_lang = detect_language_with_ai(user_text)
+        with col2:
+            if st.button("🎤 Press to Speak", type="primary", use_container_width=True):
+                with st.spinner("🎙️ Recording... (5 seconds)"):
+                    # Record audio
+                    audio_path = record_audio(duration=5)
                 
-                lang_name, lang_flag = get_language_display(detected_lang)
-                
-                st.success(f"**🧑 You {lang_flag}:** {user_text}")
-                st.info(f"✅ Detected Language: **{lang_name}**")
-                
-                with st.spinner(f"🤖 Generating response in {lang_name}..."):
-                    # Generate AI response in the detected language
-                    response = generate_response(user_text, detected_lang)
-                    
-                    if response:
-                        st.info(f"**🤖 AI {lang_flag}:** {response}")
+                if audio_path:
+                    with st.spinner("🔄 Transcribing with AI language detection..."):
+                        # Convert speech to text
+                        user_text, initial_lang = speech_to_text_multilang(audio_path)
                         
-                        # Add to conversation history
-                        st.session_state.conversation_history.append({
-                            'user': user_text,
-                            'ai': response,
-                            'user_language': detected_lang,
-                            'ai_language': detected_lang
-                        })
+                        if not user_text:
+                            st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
+                        else:
+                            process_user_input(user_text, initial_lang)
                         
-                        with st.spinner(f"🔊 Speaking..."):
-                            speak_text(response)
-                        
-                        st.success("✅ Response completed!")
-                    else:
-                        st.error("❌ Failed to generate response")
-                
-                os.remove(audio_path)
+                        os.remove(audio_path)
+else:
+    st.info("💡 **Running on Streamlit Cloud?** Voice recording requires local deployment. Use text input above instead!")
 
 # Footer
 st.markdown("---")
-st.markdown("**ℹ️ Note:** Each recording is 5 seconds long. Press the mic button to start.")
+st.markdown("**ℹ️ Note:** Voice input works only when running locally. Use text input on Streamlit Cloud.")
 st.markdown("**🤖 AI Model:** " + MODEL_NAME)
 st.markdown("**🔍 Detection:** AI-powered language detection")
 
