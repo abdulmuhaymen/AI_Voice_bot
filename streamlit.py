@@ -61,42 +61,46 @@ MODEL_NAME = get_working_model()
 # =============================
 def speech_to_text_multilang(audio_path):
     """
-    Try transcribing with both Punjabi and Urdu to see which works better.
+    Try transcribing with multiple languages to see which works better.
     Returns: (transcribed_text, detected_language_code)
     """
     results = []
+    errors = []
     
-    # Try Urdu first
-    try:
-        with open(audio_path, "rb") as audio_file:
-            transcript_ur = eleven_client.speech_to_text.convert(
-                file=audio_file,
-                model_id="scribe_v1",
-                language_code="urd"  # Urdu
-            )
-            if transcript_ur.text.strip():
-                results.append(("urd", transcript_ur.text.strip()))
-    except Exception as e:
-        pass
+    # Try multiple languages
+    languages = [
+        ("urd", "Urdu"),
+        ("pan", "Punjabi"),
+        ("eng", "English"),
+        ("hin", "Hindi")
+    ]
     
-    # Try Punjabi
-    try:
-        with open(audio_path, "rb") as audio_file:
-            transcript_pa = eleven_client.speech_to_text.convert(
-                file=audio_file,
-                model_id="scribe_v1",
-                language_code="pan"  # Punjabi
-            )
-            if transcript_pa.text.strip():
-                results.append(("pan", transcript_pa.text.strip()))
-    except Exception as e:
-        pass
+    for lang_code, lang_name in languages:
+        try:
+            with open(audio_path, "rb") as audio_file:
+                st.write(f"🔄 Trying {lang_name}...")
+                transcript = eleven_client.speech_to_text.convert(
+                    file=audio_file,
+                    model_id="scribe_v1",
+                    language_code=lang_code
+                )
+                if transcript.text.strip():
+                    st.success(f"✅ {lang_name} transcription successful!")
+                    results.append((lang_code, transcript.text.strip()))
+                    break  # Stop after first successful transcription
+        except Exception as e:
+            errors.append(f"{lang_name}: {str(e)}")
+            continue
     
-    # If we have results, let user choose or use AI to detect
+    # If we have results, return the first successful one
     if results:
-        # For now, return the first successful result
-        # You can enhance this by comparing which one makes more sense
         return results[0][1], results[0][0]
+    
+    # Show errors if nothing worked
+    if errors:
+        st.error("❌ Transcription errors:")
+        for err in errors:
+            st.error(err)
     
     return "", "pan"
 
