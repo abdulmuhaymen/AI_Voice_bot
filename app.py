@@ -23,7 +23,6 @@ st.set_page_config(
 # Load Environment Variables
 # =============================
 load_dotenv()
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
@@ -91,8 +90,8 @@ def speech_to_text_multilang(audio_path):
                 model_id="scribe_v1",
                 language_code="urd"  # Urdu
             )
-            if transcript_ur.text.strip():
-                results.append(("urd", transcript_ur.text.strip()))
+        if transcript_ur.text.strip():
+            results.append(("urd", transcript_ur.text.strip()))
     except Exception as e:
         pass
     
@@ -104,8 +103,8 @@ def speech_to_text_multilang(audio_path):
                 model_id="scribe_v1",
                 language_code="pan"  # Punjabi
             )
-            if transcript_pa.text.strip():
-                results.append(("pan", transcript_pa.text.strip()))
+        if transcript_pa.text.strip():
+            results.append(("pan", transcript_pa.text.strip()))
     except Exception as e:
         pass
     
@@ -128,8 +127,7 @@ def detect_language_with_ai(text):
     if not text.strip():
         return "pan"
     
-    detection_prompt = f"""You are a language detection expert. 
-Analyze the following text and determine if it is:
+    detection_prompt = f"""You are a language detection expert. Analyze the following text and determine if it is:
 1. Punjabi (ਪੰਜਾਬੀ) - can be written in Gurmukhi or Shahmukhi script
 2. Urdu (اردو) - written in Perso-Arabic script
 3. English
@@ -138,13 +136,12 @@ Text: "{text}"
 
 Respond with ONLY ONE WORD: either "punjabi", "urdu", or "english"
 Do not provide any explanation, just the language name in lowercase."""
-
+    
     try:
         response = genai_client.models.generate_content(
             model=MODEL_NAME,
             contents=detection_prompt,
         )
-        
         detected = response.text.strip().lower()
         
         if "urdu" in detected:
@@ -156,7 +153,6 @@ Do not provide any explanation, just the language name in lowercase."""
         else:
             # Fallback to script detection
             return fallback_script_detection(text)
-            
     except Exception as e:
         st.warning(f"AI detection failed: {e}")
         return fallback_script_detection(text)
@@ -202,16 +198,16 @@ def generate_response(prompt, detected_language):
     
     # Language-specific instructions
     language_instructions = {
-        "urd": """You are a helpful AI assistant. The user is speaking in Urdu (اردو). 
+        "urd": """You are a helpful AI assistant. The user is speaking in Urdu (اردو).
 You MUST respond ONLY in Urdu using Perso-Arabic/Nastaliq script.
 Important: This is URDU, not Punjabi. Use proper Urdu vocabulary and grammar.
 Keep your responses natural, conversational, and friendly in Urdu.
 Do not mix languages. Use only Urdu (اردو).""",
         
-        "pan": """You are a helpful AI assistant. The user is speaking in Punjabi (ਪੰਜਾਬੀ). 
+        "pan": """You are a helpful AI assistant. The user is speaking in Punjabi (ਪੰਜਾਬੀ).
 You MUST respond ONLY in Punjabi.
 Important: This is PUNJABI, not Urdu. Use proper Punjabi vocabulary and grammar.
-You can use either Gurmukhi (ਪੰਜਾਬੀ) or Shahmukhi (پنجابی) script.
+You MUST only use Shahmukhi (پنجابی) script.
 Keep your responses natural, conversational, and friendly in Punjabi.
 Do not mix languages. Use only Punjabi.""",
         
@@ -220,7 +216,6 @@ Respond in English with natural and conversational language."""
     }
     
     system_instruction = language_instructions.get(detected_language, language_instructions["pan"])
-    
     full_prompt = f"{system_instruction}\n\nUser: {prompt}\n\nAssistant:"
     
     response_text = ""
@@ -259,7 +254,6 @@ def speak_text(text):
         data, samplerate = sf.read(temp_audio.name, dtype="float32")
         sd.play(data, samplerate)
         sd.wait()
-        
         os.remove(temp_audio.name)
     except Exception as e:
         st.error(f"❌ TTS Error: {e}")
@@ -288,17 +282,21 @@ st.markdown("---")
 if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
 
-# Language selection override (optional manual selection)
+# Language toggle between Urdu and Punjabi
 st.sidebar.header("⚙️ Settings")
-manual_override = st.sidebar.checkbox("🔧 Manual Language Override", value=False)
-if manual_override:
-    selected_lang = st.sidebar.selectbox(
-        "Select Language",
-        options=["urd", "pan", "eng"],
-        format_func=lambda x: get_language_display(x)[0]
-    )
+# Segmented toggle button for Urdu/Punjabi
+selected_lang_display = st.sidebar.radio(
+    "Select Language",
+    options=["Urdu (اردو)", "Punjabi (ਪੰਜਾਬੀ)"],
+    horizontal=True,
+    index=0
+)
+
+# Map display name to language code
+if "Urdu" in selected_lang_display:
+    selected_lang = "urd"
 else:
-    selected_lang = None
+    selected_lang = "pan"
 
 # Display conversation history
 if st.session_state.conversation_history:
@@ -314,7 +312,6 @@ if st.session_state.conversation_history:
 
 # Center the mic button
 col1, col2, col3 = st.columns([1, 2, 1])
-
 with col2:
     if st.button("🎤 Press to Speak", type="primary", use_container_width=True):
         with st.spinner("🎙️ Recording... (5 seconds)"):
@@ -329,14 +326,8 @@ with col2:
                 st.warning("⚠️ کوئی آواز نہیں ملی / ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਮਿਲੀ / No voice detected")
                 os.remove(audio_path)
             else:
-                # Use manual override if enabled, otherwise use AI detection
-                if manual_override:
-                    detected_lang = selected_lang
-                    st.info(f"🔧 Manual override: {get_language_display(detected_lang)[0]}")
-                else:
-                    with st.spinner("🤖 Detecting language with AI..."):
-                        detected_lang = detect_language_with_ai(user_text)
-                
+                # Use selected language
+                detected_lang = selected_lang
                 lang_name, lang_flag = get_language_display(detected_lang)
                 
                 st.success(f"**🧑 You {lang_flag}:** {user_text}")
